@@ -1,0 +1,12 @@
+node_modules
+.git
+.env
+.env.*
+tests
+__tests__
+*.test.js
+.github
+.eslintrc*
+coverage
+.nyc_output
+data/*.db

@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - '3000:3000'
+    environment:
+      - PORT=3000
+      - JWT_SECRET=change_me_in_production
+      - DATABASE_PATH=/app/data/recipes.db
+    volumes:
+      - recipe-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  recipe-data:

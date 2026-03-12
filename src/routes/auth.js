@@ -37,7 +37,21 @@ router.post('/register', validate(registerValidation), async (req, res, next) =>
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const user = createUser({ username, email, passwordHash });
+
+    let user;
+    try {
+      user = createUser({ username, email, passwordHash });
+    } catch (err) {
+      if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        if (err.message.includes('users.email')) {
+          return res.status(409).json({ error: 'Email already registered' });
+        }
+        if (err.message.includes('users.username')) {
+          return res.status(409).json({ error: 'Username already taken' });
+        }
+      }
+      throw err;
+    }
 
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET || 'test-secret', {
       expiresIn: '7d',

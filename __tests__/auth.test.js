@@ -9,7 +9,10 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-  db.close();
+  // Clean up data but do NOT close the shared db singleton —
+  // closing it causes failures in other test files that share the same module.
+  db.exec('DELETE FROM recipes');
+  db.exec('DELETE FROM users');
 });
 
 describe('POST /api/auth/register', () => {

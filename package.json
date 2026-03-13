@@ -5,8 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "jest --runInBand",
-    "lint": "eslint src/"
+    "test": "npx jest --runInBand",
+    "lint": "npx eslint src/"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

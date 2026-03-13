@@ -638,4 +638,78 @@ describe('AC7: Additional constraint and edge case validation', () => {
     expect(tags1.find(t => t.id === tag.id)).toBeDefined();
     expect(tags2.find(t => t.id === tag.id)).toBeDefined();
   });
+
+  test('deleting a category cascades to recipe_categories junction rows', () => {
+    const userId = createTestUser('cat_cascade_user_' + Date.now());
+    const recipeId = createTestRecipe(userId, 'Cat Cascade Test');
+    const cat = categoryModel.createCategory('CatCascade_' + Date.now());
+    db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
+
+    expect(db.prepare('SELECT * FROM recipe_categories WHERE category_id = ?').all(cat.id)).toHaveLength(1);
+    db.prepare('DELETE FROM categories WHERE id = ?').run(cat.id);
+    expect(db.prepare('SELECT * FROM recipe_categories WHERE category_id = ?').all(cat.id)).toHaveLength(0);
+  });
+
+  test('deleting a tag cascades to recipe_tags junction rows', () => {
+    const userId = createTestUser('tag_cascade_user_' + Date.now());
+    const recipeId = createTestRecipe(userId, 'Tag Cascade Test');
+    const tag = tagModel.createTag('TagCascade_' + Date.now());
+    db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
+
+    expect(db.prepare('SELECT * FROM recipe_tags WHERE tag_id = ?').all(tag.id)).toHaveLength(1);
+    db.prepare('DELETE FROM tags WHERE id = ?').run(tag.id);
+    expect(db.prepare('SELECT * FROM recipe_tags WHERE tag_id = ?').all(tag.id)).toHaveLength(0);
+  });
+
+  test('user cascade chain: deleting user removes recipes and all junction rows', () => {
+    const userId = createTestUser('chain_user_' + Date.now());
+    const recipeId = createTestRecipe(userId, 'Chain Test');
+    const cat = categoryModel.createCategory('ChainCat_' + Date.now());
+    const tag = tagModel.createTag('ChainTag_' + Date.now());
+
+    db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
+    db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
+
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+
+    expect(db.prepare('SELECT * FROM recipes WHERE id = ?').all(recipeId)).toHaveLength(0);
+    expect(db.prepare('SELECT * FROM recipe_categories WHERE recipe_id = ?').all(recipeId)).toHaveLength(0);
+    expect(db.prepare('SELECT * FROM recipe_tags WHERE recipe_id = ?').all(recipeId)).toHaveLength(0);
+    // Standalone entities remain
+    expect(db.prepare('SELECT * FROM categories WHERE id = ?').get(cat.id)).toBeDefined();
+    expect(db.prepare('SELECT * FROM tags WHERE id = ?').get(tag.id)).toBeDefined();
+  });
+
+  test('schema is idempotent — re-executing CREATE IF NOT EXISTS preserves data', () => {
+    const name = 'Idempotent_' + Date.now();
+    categoryModel.createCategory(name);
+
+    const schemaPath = path.join(__dirname, '..', 'src', 'db', 'schema.sql');
+    const schema = fs.readFileSync(schemaPath, 'utf-8');
+    expect(() => db.exec(schema)).not.toThrow();
+
+    const all = categoryModel.getAllCategories();
+    expect(all.find(c => c.name === name)).toBeDefined();
+  });
+
+  test('special characters preserved in category and tag names', () => {
+    const catName = "Chef's Special <Appetizer> & Dessert #1 @Home!";
+    const tagName = '日本語-タグ_with-dashes & spaces';
+    const cat = categoryModel.createCategory(catName);
+    const tag = tagModel.createTag(tagName);
+    expect(cat.name).toBe(catName);
+    expect(tag.name).toBe(tagName);
+  });
+
+  test('module exports correct functions for category model', () => {
+    expect(typeof categoryModel.getAllCategories).toBe('function');
+    expect(typeof categoryModel.createCategory).toBe('function');
+    expect(typeof categoryModel.getCategoriesByRecipeId).toBe('function');
+  });
+
+  test('module exports correct functions for tag model', () => {
+    expect(typeof tagModel.getAllTags).toBe('function');
+    expect(typeof tagModel.createTag).toBe('function');
+    expect(typeof tagModel.getTagsByRecipeId).toBe('function');
+  });
 });

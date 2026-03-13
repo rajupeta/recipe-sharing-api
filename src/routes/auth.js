@@ -3,7 +3,7 @@ const { body } = require('express-validator');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const validate = require('../middleware/validate');
-const { createUser, findByEmail, findByUsername } = require('../models/user');
+const { createUser, findByEmail, findByUsername, findById } = require('../models/user');
 
 const router = express.Router();
 
@@ -58,6 +58,41 @@ router.post('/register', validate(registerValidation), async (req, res, next) =>
     });
 
     return res.status(201).json({ user, token });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const loginValidation = [
+  body('email')
+    .trim()
+    .notEmpty().withMessage('Email is required')
+    .isEmail().withMessage('Must be a valid email address'),
+  body('password')
+    .notEmpty().withMessage('Password is required'),
+];
+
+router.post('/login', validate(loginValidation), async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = findByEmail(email);
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET || 'test-secret', {
+      expiresIn: '7d',
+    });
+
+    const { password_hash, ...userWithoutPassword } = user;
+
+    return res.status(200).json({ user: userWithoutPassword, token });
   } catch (err) {
     next(err);
   }

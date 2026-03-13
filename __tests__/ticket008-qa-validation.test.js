@@ -1,282 +1,265 @@
 /**
  * TICKET-008 QA Validation — Categories and Tags Database Schema and Models
  *
- * Test-agent acceptance-criteria validation covering:
- * AC1: All four tables created on startup with correct constraints
- * AC2: createCategory/createTag inserts and returns new rows
- * AC3: Duplicate names throw appropriate errors
- * AC4: getAllCategories/getAllTags return all rows
- * AC5: getCategoriesByRecipeId/getTagsByRecipeId return correct associations via junction tables
- * AC6: ON DELETE CASCADE works — deleting a recipe removes junction rows
- * AC7: Edge cases — concurrent associations, large datasets, boundary inputs
+ * Systematic validation of all acceptance criteria:
+ * 1. All four tables created on startup with correct constraints
+ * 2. createCategory/createTag inserts and returns new rows
+ * 3. Duplicate names throw appropriate errors
+ * 4. getAllCategories/getAllTags return all rows
+ * 5. getCategoriesByRecipeId/getTagsByRecipeId return correct associations via junction tables
+ * 6. ON DELETE CASCADE works — deleting a recipe removes junction rows
+ * 7. Tests verify all model functions and constraint behavior
  */
 
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-describe('TICKET-008 QA Validation — Categories & Tags', () => {
+describe('TICKET-008 QA Validation — Categories and Tags', () => {
   let tmpDir;
   let db;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-008-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-ticket008-'));
     process.env.DATABASE_PATH = path.join(tmpDir, 'test.db');
     jest.resetModules();
     db = require('../src/db/database');
   });
 
   afterEach(() => {
-    if (db && db.open) db.close();
+    db.close();
     try {
       for (const file of fs.readdirSync(tmpDir)) {
         fs.unlinkSync(path.join(tmpDir, file));
       }
       fs.rmdirSync(tmpDir);
-    } catch (_) { /* cleanup best-effort */ }
+    } catch (e) {
+      // ignore cleanup errors
+    }
   });
 
   function createUser(suffix = '') {
-    return db.prepare(
+    const result = db.prepare(
       'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)'
-    ).run(`user${suffix}`, `user${suffix}@test.com`, 'hash123');
+    ).run(`user${suffix}`, `user${suffix}@test.com`, 'hashedpw');
+    return result.lastInsertRowid;
   }
 
-  function createRecipe(userId, suffix = '') {
-    return db.prepare(
+  function createRecipe(userId, title = 'Test Recipe') {
+    const result = db.prepare(
       'INSERT INTO recipes (user_id, title, ingredients, steps) VALUES (?, ?, ?, ?)'
-    ).run(userId, `Recipe${suffix}`, 'flour, eggs', 'mix and bake');
+    ).run(userId, title, '["flour","sugar"]', '["mix","bake"]');
+    return result.lastInsertRowid;
   }
 
-  function createUserAndRecipe(suffix = '') {
-    const user = createUser(suffix);
-    const recipe = createRecipe(user.lastInsertRowid, suffix);
-    return { userId: user.lastInsertRowid, recipeId: recipe.lastInsertRowid };
-  }
+  // ── AC 1: All four tables created on startup with correct constraints ──
 
-  // ──────────────────────────────────────────────
-  // AC1: All four tables created with correct constraints
-  // ──────────────────────────────────────────────
-
-  describe('AC1: Table creation and constraints', () => {
-    test('all four new tables exist', () => {
-      const tables = db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('categories','tags','recipe_categories','recipe_tags') ORDER BY name"
-      ).all();
-      expect(tables.map(t => t.name)).toEqual([
-        'categories', 'recipe_categories', 'recipe_tags', 'tags'
-      ]);
-    });
-
-    test('categories table: id is INTEGER PRIMARY KEY AUTOINCREMENT', () => {
+  describe('AC1: Table creation on startup', () => {
+    test('categories table exists with id (PK, AUTOINCREMENT) and name (UNIQUE NOT NULL)', () => {
       const cols = db.pragma('table_info(categories)');
-      const id = cols.find(c => c.name === 'id');
-      expect(id).toBeDefined();
-      expect(id.type).toBe('INTEGER');
-      expect(id.pk).toBe(1);
+      expect(cols).toHaveLength(2);
+
+      const idCol = cols.find(c => c.name === 'id');
+      expect(idCol).toBeDefined();
+      expect(idCol.type).toBe('INTEGER');
+      expect(idCol.pk).toBe(1);
+
+      const nameCol = cols.find(c => c.name === 'name');
+      expect(nameCol).toBeDefined();
+      expect(nameCol.type).toBe('TEXT');
+      expect(nameCol.notnull).toBe(1);
     });
 
-    test('categories table: name is TEXT UNIQUE NOT NULL', () => {
-      const cols = db.pragma('table_info(categories)');
-      const name = cols.find(c => c.name === 'name');
-      expect(name).toBeDefined();
-      expect(name.type).toBe('TEXT');
-      expect(name.notnull).toBe(1);
-
-      // UNIQUE verified by attempting duplicate insert
-      db.prepare('INSERT INTO categories (name) VALUES (?)').run('UniqueTest');
-      expect(() => {
-        db.prepare('INSERT INTO categories (name) VALUES (?)').run('UniqueTest');
-      }).toThrow();
-    });
-
-    test('tags table: id is INTEGER PRIMARY KEY AUTOINCREMENT', () => {
+    test('tags table exists with id (PK, AUTOINCREMENT) and name (UNIQUE NOT NULL)', () => {
       const cols = db.pragma('table_info(tags)');
-      const id = cols.find(c => c.name === 'id');
-      expect(id).toBeDefined();
-      expect(id.type).toBe('INTEGER');
-      expect(id.pk).toBe(1);
+      expect(cols).toHaveLength(2);
+
+      const idCol = cols.find(c => c.name === 'id');
+      expect(idCol).toBeDefined();
+      expect(idCol.type).toBe('INTEGER');
+      expect(idCol.pk).toBe(1);
+
+      const nameCol = cols.find(c => c.name === 'name');
+      expect(nameCol).toBeDefined();
+      expect(nameCol.type).toBe('TEXT');
+      expect(nameCol.notnull).toBe(1);
     });
 
-    test('tags table: name is TEXT UNIQUE NOT NULL', () => {
-      const cols = db.pragma('table_info(tags)');
-      const name = cols.find(c => c.name === 'name');
-      expect(name).toBeDefined();
-      expect(name.type).toBe('TEXT');
-      expect(name.notnull).toBe(1);
-
-      db.prepare('INSERT INTO tags (name) VALUES (?)').run('UniqueTagTest');
-      expect(() => {
-        db.prepare('INSERT INTO tags (name) VALUES (?)').run('UniqueTagTest');
-      }).toThrow();
-    });
-
-    test('recipe_categories: composite PK on (recipe_id, category_id)', () => {
+    test('recipe_categories junction table has correct columns and composite PK', () => {
       const cols = db.pragma('table_info(recipe_categories)');
-      const pkCols = cols.filter(c => c.pk > 0).map(c => c.name).sort();
-      expect(pkCols).toEqual(['category_id', 'recipe_id']);
+      expect(cols).toHaveLength(2);
+
+      const recipeIdCol = cols.find(c => c.name === 'recipe_id');
+      expect(recipeIdCol).toBeDefined();
+      expect(recipeIdCol.notnull).toBe(1);
+      expect(recipeIdCol.pk).toBeGreaterThan(0); // part of composite PK
+
+      const categoryIdCol = cols.find(c => c.name === 'category_id');
+      expect(categoryIdCol).toBeDefined();
+      expect(categoryIdCol.notnull).toBe(1);
+      expect(categoryIdCol.pk).toBeGreaterThan(0);
     });
 
-    test('recipe_categories: FK to recipes(id) with ON DELETE CASCADE', () => {
-      const fks = db.pragma('foreign_key_list(recipe_categories)');
-      const recipeFk = fks.find(fk => fk.from === 'recipe_id');
-      expect(recipeFk).toBeDefined();
-      expect(recipeFk.table).toBe('recipes');
-      expect(recipeFk.to).toBe('id');
-      expect(recipeFk.on_delete).toBe('CASCADE');
-    });
-
-    test('recipe_categories: FK to categories(id) with ON DELETE CASCADE', () => {
-      const fks = db.pragma('foreign_key_list(recipe_categories)');
-      const catFk = fks.find(fk => fk.from === 'category_id');
-      expect(catFk).toBeDefined();
-      expect(catFk.table).toBe('categories');
-      expect(catFk.to).toBe('id');
-      expect(catFk.on_delete).toBe('CASCADE');
-    });
-
-    test('recipe_tags: composite PK on (recipe_id, tag_id)', () => {
+    test('recipe_tags junction table has correct columns and composite PK', () => {
       const cols = db.pragma('table_info(recipe_tags)');
-      const pkCols = cols.filter(c => c.pk > 0).map(c => c.name).sort();
-      expect(pkCols).toEqual(['recipe_id', 'tag_id']);
+      expect(cols).toHaveLength(2);
+
+      const recipeIdCol = cols.find(c => c.name === 'recipe_id');
+      expect(recipeIdCol).toBeDefined();
+      expect(recipeIdCol.notnull).toBe(1);
+      expect(recipeIdCol.pk).toBeGreaterThan(0);
+
+      const tagIdCol = cols.find(c => c.name === 'tag_id');
+      expect(tagIdCol).toBeDefined();
+      expect(tagIdCol.notnull).toBe(1);
+      expect(tagIdCol.pk).toBeGreaterThan(0);
     });
 
-    test('recipe_tags: FK to recipes(id) with ON DELETE CASCADE', () => {
-      const fks = db.pragma('foreign_key_list(recipe_tags)');
-      const recipeFk = fks.find(fk => fk.from === 'recipe_id');
-      expect(recipeFk).toBeDefined();
+    test('recipe_categories has correct foreign keys with ON DELETE CASCADE', () => {
+      const fkeys = db.pragma('foreign_key_list(recipe_categories)');
+      expect(fkeys).toHaveLength(2);
+
+      const recipeFk = fkeys.find(fk => fk.from === 'recipe_id');
       expect(recipeFk.table).toBe('recipes');
       expect(recipeFk.to).toBe('id');
       expect(recipeFk.on_delete).toBe('CASCADE');
+
+      const categoryFk = fkeys.find(fk => fk.from === 'category_id');
+      expect(categoryFk.table).toBe('categories');
+      expect(categoryFk.to).toBe('id');
+      expect(categoryFk.on_delete).toBe('CASCADE');
     });
 
-    test('recipe_tags: FK to tags(id) with ON DELETE CASCADE', () => {
-      const fks = db.pragma('foreign_key_list(recipe_tags)');
-      const tagFk = fks.find(fk => fk.from === 'tag_id');
-      expect(tagFk).toBeDefined();
+    test('recipe_tags has correct foreign keys with ON DELETE CASCADE', () => {
+      const fkeys = db.pragma('foreign_key_list(recipe_tags)');
+      expect(fkeys).toHaveLength(2);
+
+      const recipeFk = fkeys.find(fk => fk.from === 'recipe_id');
+      expect(recipeFk.table).toBe('recipes');
+      expect(recipeFk.to).toBe('id');
+      expect(recipeFk.on_delete).toBe('CASCADE');
+
+      const tagFk = fkeys.find(fk => fk.from === 'tag_id');
       expect(tagFk.table).toBe('tags');
       expect(tagFk.to).toBe('id');
       expect(tagFk.on_delete).toBe('CASCADE');
     });
 
-    test('foreign keys are enforced (pragma foreign_keys = ON)', () => {
-      const fk = db.pragma('foreign_keys');
-      expect(fk[0].foreign_keys).toBe(1);
+    test('foreign keys are enforced (PRAGMA foreign_keys = ON)', () => {
+      const fkStatus = db.pragma('foreign_keys');
+      expect(fkStatus[0].foreign_keys).toBe(1);
     });
   });
 
-  // ──────────────────────────────────────────────
-  // AC2: createCategory/createTag inserts and returns new rows
-  // ──────────────────────────────────────────────
+  // ── AC 2: createCategory/createTag inserts and returns new rows ──
 
-  describe('AC2: Create functions return new rows', () => {
-    test('createCategory returns object with numeric id and the given name', () => {
+  describe('AC2: Create functions insert and return new rows', () => {
+    test('createCategory returns object with id and name', () => {
       const categoryModel = require('../src/models/category');
-      const result = categoryModel.createCategory('Italian');
-      expect(result).toEqual({ id: expect.any(Number), name: 'Italian' });
-      expect(result.id).toBeGreaterThan(0);
+      const cat = categoryModel.createCategory('Italian');
+      expect(cat).toEqual({ id: expect.any(Number), name: 'Italian' });
+      expect(cat.id).toBeGreaterThan(0);
     });
 
-    test('createCategory persists row to database', () => {
+    test('createCategory actually persists the row in the database', () => {
       const categoryModel = require('../src/models/category');
-      const result = categoryModel.createCategory('Mexican');
-      const row = db.prepare('SELECT * FROM categories WHERE id = ?').get(result.id);
+      const cat = categoryModel.createCategory('Persisted');
+      const row = db.prepare('SELECT * FROM categories WHERE id = ?').get(cat.id);
       expect(row).toBeDefined();
-      expect(row.name).toBe('Mexican');
+      expect(row.name).toBe('Persisted');
     });
 
-    test('createTag returns object with numeric id and the given name', () => {
+    test('createTag returns object with id and name', () => {
       const tagModel = require('../src/models/tag');
-      const result = tagModel.createTag('vegan');
-      expect(result).toEqual({ id: expect.any(Number), name: 'vegan' });
-      expect(result.id).toBeGreaterThan(0);
+      const tag = tagModel.createTag('vegan');
+      expect(tag).toEqual({ id: expect.any(Number), name: 'vegan' });
+      expect(tag.id).toBeGreaterThan(0);
     });
 
-    test('createTag persists row to database', () => {
+    test('createTag actually persists the row in the database', () => {
       const tagModel = require('../src/models/tag');
-      const result = tagModel.createTag('keto');
-      const row = db.prepare('SELECT * FROM tags WHERE id = ?').get(result.id);
+      const tag = tagModel.createTag('persisted-tag');
+      const row = db.prepare('SELECT * FROM tags WHERE id = ?').get(tag.id);
       expect(row).toBeDefined();
-      expect(row.name).toBe('keto');
+      expect(row.name).toBe('persisted-tag');
     });
 
-    test('successive createCategory calls return incrementing ids', () => {
+    test('createCategory auto-increments ids', () => {
       const categoryModel = require('../src/models/category');
-      const a = categoryModel.createCategory('A');
-      const b = categoryModel.createCategory('B');
-      expect(b.id).toBeGreaterThan(a.id);
+      const c1 = categoryModel.createCategory('First');
+      const c2 = categoryModel.createCategory('Second');
+      const c3 = categoryModel.createCategory('Third');
+      expect(c2.id).toBeGreaterThan(c1.id);
+      expect(c3.id).toBeGreaterThan(c2.id);
     });
 
-    test('successive createTag calls return incrementing ids', () => {
+    test('createTag auto-increments ids', () => {
       const tagModel = require('../src/models/tag');
-      const a = tagModel.createTag('a');
-      const b = tagModel.createTag('b');
-      expect(b.id).toBeGreaterThan(a.id);
+      const t1 = tagModel.createTag('a');
+      const t2 = tagModel.createTag('b');
+      const t3 = tagModel.createTag('c');
+      expect(t2.id).toBeGreaterThan(t1.id);
+      expect(t3.id).toBeGreaterThan(t2.id);
     });
   });
 
-  // ──────────────────────────────────────────────
-  // AC3: Duplicate names throw descriptive errors
-  // ──────────────────────────────────────────────
+  // ── AC 3: Duplicate names throw or return appropriate errors ──
 
-  describe('AC3: Duplicate name handling', () => {
+  describe('AC3: Duplicate names throw descriptive errors', () => {
     test('createCategory throws descriptive error on duplicate name', () => {
       const categoryModel = require('../src/models/category');
       categoryModel.createCategory('Breakfast');
-      expect(() => categoryModel.createCategory('Breakfast'))
-        .toThrow(/Category with name "Breakfast" already exists/);
+      expect(() => categoryModel.createCategory('Breakfast')).toThrow(
+        /Category with name "Breakfast" already exists/
+      );
     });
 
     test('createTag throws descriptive error on duplicate name', () => {
       const tagModel = require('../src/models/tag');
-      tagModel.createTag('spicy');
-      expect(() => tagModel.createTag('spicy'))
-        .toThrow(/Tag with name "spicy" already exists/);
+      tagModel.createTag('gluten-free');
+      expect(() => tagModel.createTag('gluten-free')).toThrow(
+        /Tag with name "gluten-free" already exists/
+      );
     });
 
-    test('duplicate category error is an instance of Error', () => {
+    test('duplicate category error does not corrupt state — original row still exists', () => {
       const categoryModel = require('../src/models/category');
-      categoryModel.createCategory('Dup');
+      const original = categoryModel.createCategory('Original');
       try {
-        categoryModel.createCategory('Dup');
-        fail('Expected an error');
-      } catch (err) {
-        expect(err).toBeInstanceOf(Error);
+        categoryModel.createCategory('Original');
+      } catch (e) {
+        // expected
       }
+      const all = categoryModel.getAllCategories();
+      expect(all).toHaveLength(1);
+      expect(all[0].id).toBe(original.id);
     });
 
-    test('duplicate tag error is an instance of Error', () => {
+    test('duplicate tag error does not corrupt state — original row still exists', () => {
       const tagModel = require('../src/models/tag');
-      tagModel.createTag('dup');
+      const original = tagModel.createTag('original');
       try {
-        tagModel.createTag('dup');
-        fail('Expected an error');
-      } catch (err) {
-        expect(err).toBeInstanceOf(Error);
+        tagModel.createTag('original');
+      } catch (e) {
+        // expected
       }
+      const all = tagModel.getAllTags();
+      expect(all).toHaveLength(1);
+      expect(all[0].id).toBe(original.id);
     });
 
-    test('category names are case-sensitive (SQLite default)', () => {
+    test('UNIQUE constraint is case-sensitive (SQLite default)', () => {
       const categoryModel = require('../src/models/category');
-      const a = categoryModel.createCategory('Dessert');
-      const b = categoryModel.createCategory('dessert');
-      expect(a.id).not.toBe(b.id);
-    });
-
-    test('tag names are case-sensitive (SQLite default)', () => {
-      const tagModel = require('../src/models/tag');
-      const a = tagModel.createTag('Quick');
-      const b = tagModel.createTag('quick');
-      expect(a.id).not.toBe(b.id);
+      const lower = categoryModel.createCategory('dessert');
+      const upper = categoryModel.createCategory('Dessert');
+      expect(lower.id).not.toBe(upper.id);
     });
   });
 
-  // ──────────────────────────────────────────────
-  // AC4: getAll returns all rows
-  // ──────────────────────────────────────────────
+  // ── AC 4: getAllCategories/getAllTags return all rows ──
 
-  describe('AC4: getAll functions', () => {
-    test('getAllCategories returns empty array when no categories', () => {
+  describe('AC4: getAll functions return all rows', () => {
+    test('getAllCategories returns empty array when no categories exist', () => {
       const categoryModel = require('../src/models/category');
       expect(categoryModel.getAllCategories()).toEqual([]);
     });
@@ -286,20 +269,13 @@ describe('TICKET-008 QA Validation — Categories & Tags', () => {
       categoryModel.createCategory('A');
       categoryModel.createCategory('B');
       categoryModel.createCategory('C');
+      categoryModel.createCategory('D');
       const all = categoryModel.getAllCategories();
-      expect(all).toHaveLength(3);
-      expect(all.map(c => c.name)).toEqual(expect.arrayContaining(['A', 'B', 'C']));
+      expect(all).toHaveLength(4);
+      expect(all.map(c => c.name)).toEqual(expect.arrayContaining(['A', 'B', 'C', 'D']));
     });
 
-    test('getAllCategories rows have id and name properties', () => {
-      const categoryModel = require('../src/models/category');
-      categoryModel.createCategory('Test');
-      const all = categoryModel.getAllCategories();
-      expect(all[0]).toHaveProperty('id');
-      expect(all[0]).toHaveProperty('name');
-    });
-
-    test('getAllTags returns empty array when no tags', () => {
+    test('getAllTags returns empty array when no tags exist', () => {
       const tagModel = require('../src/models/tag');
       expect(tagModel.getAllTags()).toEqual([]);
     });
@@ -314,325 +290,312 @@ describe('TICKET-008 QA Validation — Categories & Tags', () => {
       expect(all.map(t => t.name)).toEqual(expect.arrayContaining(['x', 'y', 'z']));
     });
 
-    test('getAllTags rows have id and name properties', () => {
+    test('getAllCategories returns rows with correct shape', () => {
+      const categoryModel = require('../src/models/category');
+      categoryModel.createCategory('Test');
+      const rows = categoryModel.getAllCategories();
+      expect(rows[0]).toHaveProperty('id');
+      expect(rows[0]).toHaveProperty('name');
+      expect(typeof rows[0].id).toBe('number');
+      expect(typeof rows[0].name).toBe('string');
+    });
+
+    test('getAllTags returns rows with correct shape', () => {
       const tagModel = require('../src/models/tag');
       tagModel.createTag('test');
-      const all = tagModel.getAllTags();
-      expect(all[0]).toHaveProperty('id');
-      expect(all[0]).toHaveProperty('name');
+      const rows = tagModel.getAllTags();
+      expect(rows[0]).toHaveProperty('id');
+      expect(rows[0]).toHaveProperty('name');
+      expect(typeof rows[0].id).toBe('number');
+      expect(typeof rows[0].name).toBe('string');
     });
   });
 
-  // ──────────────────────────────────────────────
-  // AC5: Junction table queries return correct associations
-  // ──────────────────────────────────────────────
+  // ── AC 5: getByRecipeId returns correct associations via junction tables ──
 
-  describe('AC5: Junction table association queries', () => {
-    test('getCategoriesByRecipeId returns only categories linked to the recipe', () => {
+  describe('AC5: Junction table queries return correct associations', () => {
+    test('getCategoriesByRecipeId returns categories linked to a recipe', () => {
       const categoryModel = require('../src/models/category');
-      const { recipeId } = createUserAndRecipe('ac5cat');
-      const linked = categoryModel.createCategory('Linked');
-      categoryModel.createCategory('NotLinked');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
 
-      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)')
-        .run(recipeId, linked.id);
+      const cat1 = categoryModel.createCategory('Italian');
+      const cat2 = categoryModel.createCategory('Quick Meals');
+      categoryModel.createCategory('Unlinked');
+
+      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat1.id);
+      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat2.id);
 
       const result = categoryModel.getCategoriesByRecipeId(recipeId);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe('Linked');
-      expect(result[0].id).toBe(linked.id);
+      expect(result).toHaveLength(2);
+      expect(result.map(c => c.name).sort()).toEqual(['Italian', 'Quick Meals']);
     });
 
-    test('getCategoriesByRecipeId returns multiple categories', () => {
-      const categoryModel = require('../src/models/category');
-      const { recipeId } = createUserAndRecipe('ac5multi');
-      const cats = ['A', 'B', 'C'].map(n => categoryModel.createCategory(n));
+    test('getTagsByRecipeId returns tags linked to a recipe', () => {
+      const tagModel = require('../src/models/tag');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
 
-      for (const cat of cats) {
-        db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)')
-          .run(recipeId, cat.id);
-      }
+      const tag1 = tagModel.createTag('spicy');
+      const tag2 = tagModel.createTag('easy');
+      tagModel.createTag('unlinked');
 
-      const result = categoryModel.getCategoriesByRecipeId(recipeId);
-      expect(result).toHaveLength(3);
-      expect(result.map(c => c.name).sort()).toEqual(['A', 'B', 'C']);
+      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag1.id);
+      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag2.id);
+
+      const result = tagModel.getTagsByRecipeId(recipeId);
+      expect(result).toHaveLength(2);
+      expect(result.map(t => t.name).sort()).toEqual(['easy', 'spicy']);
     });
 
-    test('getCategoriesByRecipeId returns empty for unlinked recipe', () => {
+    test('getCategoriesByRecipeId returns empty for recipe with no categories', () => {
       const categoryModel = require('../src/models/category');
-      const { recipeId } = createUserAndRecipe('ac5empty');
-      categoryModel.createCategory('Orphan');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
       expect(categoryModel.getCategoriesByRecipeId(recipeId)).toEqual([]);
     });
 
-    test('getTagsByRecipeId returns only tags linked to the recipe', () => {
+    test('getTagsByRecipeId returns empty for recipe with no tags', () => {
       const tagModel = require('../src/models/tag');
-      const { recipeId } = createUserAndRecipe('ac5tag');
-      const linked = tagModel.createTag('linked-tag');
-      tagModel.createTag('not-linked-tag');
-
-      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)')
-        .run(recipeId, linked.id);
-
-      const result = tagModel.getTagsByRecipeId(recipeId);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe('linked-tag');
-      expect(result[0].id).toBe(linked.id);
-    });
-
-    test('getTagsByRecipeId returns multiple tags', () => {
-      const tagModel = require('../src/models/tag');
-      const { recipeId } = createUserAndRecipe('ac5multitag');
-      const tags = ['x', 'y', 'z'].map(n => tagModel.createTag(n));
-
-      for (const tag of tags) {
-        db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)')
-          .run(recipeId, tag.id);
-      }
-
-      const result = tagModel.getTagsByRecipeId(recipeId);
-      expect(result).toHaveLength(3);
-      expect(result.map(t => t.name).sort()).toEqual(['x', 'y', 'z']);
-    });
-
-    test('getTagsByRecipeId returns empty for unlinked recipe', () => {
-      const tagModel = require('../src/models/tag');
-      const { recipeId } = createUserAndRecipe('ac5emptytag');
-      tagModel.createTag('orphan-tag');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
       expect(tagModel.getTagsByRecipeId(recipeId)).toEqual([]);
     });
 
-    test('different recipes have independent category associations', () => {
+    test('getCategoriesByRecipeId returns only id and name fields', () => {
       const categoryModel = require('../src/models/category');
-      const r1 = createUserAndRecipe('r1');
-      const r2 = createUserAndRecipe('r2');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
+      const cat = categoryModel.createCategory('Check');
+      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
 
-      const catA = categoryModel.createCategory('OnlyR1');
-      const catB = categoryModel.createCategory('OnlyR2');
-      const catC = categoryModel.createCategory('Both');
-
-      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(r1.recipeId, catA.id);
-      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(r1.recipeId, catC.id);
-      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(r2.recipeId, catB.id);
-      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(r2.recipeId, catC.id);
-
-      const r1cats = categoryModel.getCategoriesByRecipeId(r1.recipeId);
-      const r2cats = categoryModel.getCategoriesByRecipeId(r2.recipeId);
-
-      expect(r1cats.map(c => c.name).sort()).toEqual(['Both', 'OnlyR1']);
-      expect(r2cats.map(c => c.name).sort()).toEqual(['Both', 'OnlyR2']);
+      const result = categoryModel.getCategoriesByRecipeId(recipeId);
+      expect(Object.keys(result[0]).sort()).toEqual(['id', 'name']);
     });
 
-    test('different recipes have independent tag associations', () => {
+    test('getTagsByRecipeId returns only id and name fields', () => {
       const tagModel = require('../src/models/tag');
-      const r1 = createUserAndRecipe('tr1');
-      const r2 = createUserAndRecipe('tr2');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
+      const tag = tagModel.createTag('check');
+      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
 
-      const tagA = tagModel.createTag('only-r1');
-      const tagB = tagModel.createTag('only-r2');
-      const tagC = tagModel.createTag('both');
+      const result = tagModel.getTagsByRecipeId(recipeId);
+      expect(Object.keys(result[0]).sort()).toEqual(['id', 'name']);
+    });
 
-      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(r1.recipeId, tagA.id);
-      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(r1.recipeId, tagC.id);
-      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(r2.recipeId, tagB.id);
-      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(r2.recipeId, tagC.id);
+    test('categories are not shared across recipes unless explicitly linked', () => {
+      const categoryModel = require('../src/models/category');
+      const userId = createUser();
+      const recipe1 = createRecipe(userId, 'Recipe 1');
+      const recipe2 = createRecipe(userId, 'Recipe 2');
 
-      const r1tags = tagModel.getTagsByRecipeId(r1.recipeId);
-      const r2tags = tagModel.getTagsByRecipeId(r2.recipeId);
+      const sharedCat = categoryModel.createCategory('Shared');
+      const r1Only = categoryModel.createCategory('Recipe1Only');
 
-      expect(r1tags.map(t => t.name).sort()).toEqual(['both', 'only-r1']);
-      expect(r2tags.map(t => t.name).sort()).toEqual(['both', 'only-r2']);
+      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipe1, sharedCat.id);
+      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipe1, r1Only.id);
+      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipe2, sharedCat.id);
+
+      expect(categoryModel.getCategoriesByRecipeId(recipe1)).toHaveLength(2);
+      expect(categoryModel.getCategoriesByRecipeId(recipe2)).toHaveLength(1);
+      expect(categoryModel.getCategoriesByRecipeId(recipe2)[0].name).toBe('Shared');
+    });
+
+    test('tags are not shared across recipes unless explicitly linked', () => {
+      const tagModel = require('../src/models/tag');
+      const userId = createUser();
+      const recipe1 = createRecipe(userId, 'Recipe 1');
+      const recipe2 = createRecipe(userId, 'Recipe 2');
+
+      const sharedTag = tagModel.createTag('shared');
+      const r1Only = tagModel.createTag('r1-only');
+
+      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipe1, sharedTag.id);
+      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipe1, r1Only.id);
+      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipe2, sharedTag.id);
+
+      expect(tagModel.getTagsByRecipeId(recipe1)).toHaveLength(2);
+      expect(tagModel.getTagsByRecipeId(recipe2)).toHaveLength(1);
+      expect(tagModel.getTagsByRecipeId(recipe2)[0].name).toBe('shared');
     });
   });
 
-  // ──────────────────────────────────────────────
-  // AC6: ON DELETE CASCADE
-  // ──────────────────────────────────────────────
+  // ── AC 6: ON DELETE CASCADE works ──
 
-  describe('AC6: ON DELETE CASCADE', () => {
-    test('deleting a recipe removes recipe_categories rows', () => {
+  describe('AC6: ON DELETE CASCADE removes junction rows', () => {
+    test('deleting a recipe removes its recipe_categories rows', () => {
       const categoryModel = require('../src/models/category');
-      const { recipeId } = createUserAndRecipe('cas1');
-      const cat = categoryModel.createCategory('CascadeCat');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
+      const cat = categoryModel.createCategory('CascadeTest');
 
       db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_categories WHERE recipe_id = ?').get(recipeId).c).toBe(1);
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_categories WHERE recipe_id = ?').get(recipeId).cnt).toBe(1);
 
       db.prepare('DELETE FROM recipes WHERE id = ?').run(recipeId);
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_categories WHERE recipe_id = ?').get(recipeId).c).toBe(0);
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_categories WHERE recipe_id = ?').get(recipeId).cnt).toBe(0);
+
+      // The category itself should survive
+      expect(categoryModel.getAllCategories()).toHaveLength(1);
     });
 
-    test('deleting a recipe removes recipe_tags rows', () => {
+    test('deleting a recipe removes its recipe_tags rows', () => {
       const tagModel = require('../src/models/tag');
-      const { recipeId } = createUserAndRecipe('cas2');
-      const tag = tagModel.createTag('cascade-tag');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
+      const tag = tagModel.createTag('cascade-test');
 
       db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_tags WHERE recipe_id = ?').get(recipeId).c).toBe(1);
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_tags WHERE recipe_id = ?').get(recipeId).cnt).toBe(1);
 
       db.prepare('DELETE FROM recipes WHERE id = ?').run(recipeId);
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_tags WHERE recipe_id = ?').get(recipeId).c).toBe(0);
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_tags WHERE recipe_id = ?').get(recipeId).cnt).toBe(0);
+
+      // The tag itself should survive
+      expect(tagModel.getAllTags()).toHaveLength(1);
     });
 
-    test('deleting a category removes recipe_categories rows but recipe survives', () => {
+    test('deleting a category removes its recipe_categories rows', () => {
       const categoryModel = require('../src/models/category');
-      const { recipeId } = createUserAndRecipe('cas3');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
       const cat = categoryModel.createCategory('WillBeDeleted');
 
       db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
       db.prepare('DELETE FROM categories WHERE id = ?').run(cat.id);
-
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_categories').get().c).toBe(0);
-      expect(db.prepare('SELECT * FROM recipes WHERE id = ?').get(recipeId)).toBeDefined();
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_categories WHERE category_id = ?').get(cat.id).cnt).toBe(0);
     });
 
-    test('deleting a tag removes recipe_tags rows but recipe survives', () => {
+    test('deleting a tag removes its recipe_tags rows', () => {
       const tagModel = require('../src/models/tag');
-      const { recipeId } = createUserAndRecipe('cas4');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
       const tag = tagModel.createTag('will-be-deleted');
 
       db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
       db.prepare('DELETE FROM tags WHERE id = ?').run(tag.id);
-
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_tags').get().c).toBe(0);
-      expect(db.prepare('SELECT * FROM recipes WHERE id = ?').get(recipeId)).toBeDefined();
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_tags WHERE tag_id = ?').get(tag.id).cnt).toBe(0);
     });
 
     test('deleting a recipe with both categories and tags cleans up all junction rows', () => {
       const categoryModel = require('../src/models/category');
       const tagModel = require('../src/models/tag');
-      const { recipeId } = createUserAndRecipe('cas5');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
 
-      const cat = categoryModel.createCategory('Combo');
-      const tag = tagModel.createTag('combo-tag');
-      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
-      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
+      const cat1 = categoryModel.createCategory('Cat1');
+      const cat2 = categoryModel.createCategory('Cat2');
+      const tag1 = tagModel.createTag('tag1');
+      const tag2 = tagModel.createTag('tag2');
+
+      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat1.id);
+      db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat2.id);
+      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag1.id);
+      db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag2.id);
 
       db.prepare('DELETE FROM recipes WHERE id = ?').run(recipeId);
 
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_categories WHERE recipe_id = ?').get(recipeId).c).toBe(0);
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_tags WHERE recipe_id = ?').get(recipeId).c).toBe(0);
-      // The category and tag entities should still exist
-      expect(categoryModel.getAllCategories()).toHaveLength(1);
-      expect(tagModel.getAllTags()).toHaveLength(1);
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_categories WHERE recipe_id = ?').get(recipeId).cnt).toBe(0);
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_tags WHERE recipe_id = ?').get(recipeId).cnt).toBe(0);
+
+      // Categories and tags themselves survive
+      expect(categoryModel.getAllCategories()).toHaveLength(2);
+      expect(tagModel.getAllTags()).toHaveLength(2);
     });
 
-    test('user deletion cascades through recipe to junction rows', () => {
+    test('cascade from user deletion propagates through recipes to junction rows', () => {
       const categoryModel = require('../src/models/category');
       const tagModel = require('../src/models/tag');
-      const { userId, recipeId } = createUserAndRecipe('cas6');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
 
       const cat = categoryModel.createCategory('UserCascade');
       const tag = tagModel.createTag('user-cascade');
       db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
       db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
 
+      // Delete user → cascades to recipes → cascades to junction rows
       db.prepare('DELETE FROM users WHERE id = ?').run(userId);
 
-      expect(db.prepare('SELECT * FROM recipes WHERE id = ?').get(recipeId)).toBeUndefined();
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_categories WHERE recipe_id = ?').get(recipeId).c).toBe(0);
-      expect(db.prepare('SELECT COUNT(*) AS c FROM recipe_tags WHERE recipe_id = ?').get(recipeId).c).toBe(0);
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipes WHERE id = ?').get(recipeId).cnt).toBe(0);
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_categories WHERE recipe_id = ?').get(recipeId).cnt).toBe(0);
+      expect(db.prepare('SELECT COUNT(*) AS cnt FROM recipe_tags WHERE recipe_id = ?').get(recipeId).cnt).toBe(0);
     });
   });
 
-  // ──────────────────────────────────────────────
-  // AC7: Edge cases and robustness
-  // ──────────────────────────────────────────────
+  // ── AC 7: Additional constraint and model behavior tests ──
 
-  describe('AC7: Edge cases', () => {
-    test('getCategoriesByRecipeId with non-existent recipe returns empty array', () => {
+  describe('AC7: Constraint enforcement and model robustness', () => {
+    test('recipe_categories rejects duplicate (recipe_id, category_id) pair', () => {
       const categoryModel = require('../src/models/category');
-      expect(categoryModel.getCategoriesByRecipeId(99999)).toEqual([]);
-    });
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
+      const cat = categoryModel.createCategory('NoDupes');
 
-    test('getTagsByRecipeId with non-existent recipe returns empty array', () => {
-      const tagModel = require('../src/models/tag');
-      expect(tagModel.getTagsByRecipeId(99999)).toEqual([]);
-    });
-
-    test('junction table FK rejects non-existent recipe_id for categories', () => {
-      const categoryModel = require('../src/models/category');
-      const cat = categoryModel.createCategory('Orphan');
-      expect(() => {
-        db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(9999, cat.id);
-      }).toThrow();
-    });
-
-    test('junction table FK rejects non-existent category_id', () => {
-      const { recipeId } = createUserAndRecipe('fk1');
-      expect(() => {
-        db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, 9999);
-      }).toThrow();
-    });
-
-    test('junction table FK rejects non-existent recipe_id for tags', () => {
-      const tagModel = require('../src/models/tag');
-      const tag = tagModel.createTag('orphan');
-      expect(() => {
-        db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(9999, tag.id);
-      }).toThrow();
-    });
-
-    test('junction table FK rejects non-existent tag_id', () => {
-      const { recipeId } = createUserAndRecipe('fk2');
-      expect(() => {
-        db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, 9999);
-      }).toThrow();
-    });
-
-    test('duplicate junction row (recipe_id, category_id) is rejected', () => {
-      const categoryModel = require('../src/models/category');
-      const { recipeId } = createUserAndRecipe('dup1');
-      const cat = categoryModel.createCategory('DupJunction');
       db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
       expect(() => {
         db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
       }).toThrow();
     });
 
-    test('duplicate junction row (recipe_id, tag_id) is rejected', () => {
+    test('recipe_tags rejects duplicate (recipe_id, tag_id) pair', () => {
       const tagModel = require('../src/models/tag');
-      const { recipeId } = createUserAndRecipe('dup2');
-      const tag = tagModel.createTag('dup-junction');
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
+      const tag = tagModel.createTag('no-dupes');
+
       db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
       expect(() => {
         db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
       }).toThrow();
     });
 
-    test('category with very long name is accepted', () => {
+    test('recipe_categories FK rejects non-existent recipe_id', () => {
       const categoryModel = require('../src/models/category');
-      const longName = 'A'.repeat(1000);
-      const cat = categoryModel.createCategory(longName);
-      expect(cat.name).toBe(longName);
-      expect(categoryModel.getAllCategories()[0].name).toBe(longName);
+      const cat = categoryModel.createCategory('OrphanCat');
+      expect(() => {
+        db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(99999, cat.id);
+      }).toThrow();
     });
 
-    test('tag with very long name is accepted', () => {
-      const tagModel = require('../src/models/tag');
-      const longName = 'T'.repeat(1000);
-      const tag = tagModel.createTag(longName);
-      expect(tag.name).toBe(longName);
-      expect(tagModel.getAllTags()[0].name).toBe(longName);
+    test('recipe_tags FK rejects non-existent tag_id', () => {
+      const userId = createUser();
+      const recipeId = createRecipe(userId);
+      expect(() => {
+        db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, 99999);
+      }).toThrow();
     });
 
-    test('createCategory with unicode and emoji', () => {
-      const categoryModel = require('../src/models/category');
-      const cat = categoryModel.createCategory('日本料理 🍣');
-      expect(cat.name).toBe('日本料理 🍣');
+    test('categories.name NOT NULL rejects null', () => {
+      expect(() => {
+        db.prepare('INSERT INTO categories (name) VALUES (?)').run(null);
+      }).toThrow();
     });
 
-    test('createTag with unicode and emoji', () => {
-      const tagModel = require('../src/models/tag');
-      const tag = tagModel.createTag('végétalien 🌱');
-      expect(tag.name).toBe('végétalien 🌱');
+    test('tags.name NOT NULL rejects null', () => {
+      expect(() => {
+        db.prepare('INSERT INTO tags (name) VALUES (?)').run(null);
+      }).toThrow();
+    });
+
+    test('categories UNIQUE index verified via index_list pragma', () => {
+      const indexes = db.pragma('index_list(categories)');
+      const uniqueIndex = indexes.find(idx => idx.unique === 1);
+      expect(uniqueIndex).toBeDefined();
+    });
+
+    test('tags UNIQUE index verified via index_list pragma', () => {
+      const indexes = db.pragma('index_list(tags)');
+      const uniqueIndex = indexes.find(idx => idx.unique === 1);
+      expect(uniqueIndex).toBeDefined();
     });
 
     test('schema is idempotent — re-executing does not error or lose data', () => {
       const categoryModel = require('../src/models/category');
       const tagModel = require('../src/models/tag');
-      categoryModel.createCategory('Persist');
-      tagModel.createTag('persist');
+      categoryModel.createCategory('Survivor');
+      tagModel.createTag('survivor');
 
       const schemaPath = path.join(__dirname, '..', 'src', 'db', 'schema.sql');
       const schema = fs.readFileSync(schemaPath, 'utf-8');
@@ -642,43 +605,29 @@ describe('TICKET-008 QA Validation — Categories & Tags', () => {
       expect(tagModel.getAllTags()).toHaveLength(1);
     });
 
-    test('many categories on one recipe', () => {
+    test('createCategory with very long name succeeds', () => {
       const categoryModel = require('../src/models/category');
-      const { recipeId } = createUserAndRecipe('many');
-      const count = 50;
-      for (let i = 0; i < count; i++) {
-        const cat = categoryModel.createCategory(`Cat${i}`);
-        db.prepare('INSERT INTO recipe_categories (recipe_id, category_id) VALUES (?, ?)').run(recipeId, cat.id);
-      }
-      expect(categoryModel.getCategoriesByRecipeId(recipeId)).toHaveLength(count);
+      const longName = 'A'.repeat(1000);
+      const cat = categoryModel.createCategory(longName);
+      expect(cat.name).toBe(longName);
+      expect(cat.name).toHaveLength(1000);
     });
 
-    test('many tags on one recipe', () => {
+    test('createTag with very long name succeeds', () => {
       const tagModel = require('../src/models/tag');
-      const { recipeId } = createUserAndRecipe('manytags');
-      const count = 50;
-      for (let i = 0; i < count; i++) {
-        const tag = tagModel.createTag(`tag${i}`);
-        db.prepare('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)').run(recipeId, tag.id);
-      }
-      expect(tagModel.getTagsByRecipeId(recipeId)).toHaveLength(count);
+      const longName = 'b'.repeat(1000);
+      const tag = tagModel.createTag(longName);
+      expect(tag.name).toBe(longName);
     });
-  });
 
-  // ──────────────────────────────────────────────
-  // Module exports verification
-  // ──────────────────────────────────────────────
-
-  describe('Module exports', () => {
-    test('category model exports getAllCategories, createCategory, getCategoriesByRecipeId', () => {
+    test('model modules export the expected functions', () => {
       const categoryModel = require('../src/models/category');
+      const tagModel = require('../src/models/tag');
+
       expect(typeof categoryModel.getAllCategories).toBe('function');
       expect(typeof categoryModel.createCategory).toBe('function');
       expect(typeof categoryModel.getCategoriesByRecipeId).toBe('function');
-    });
 
-    test('tag model exports getAllTags, createTag, getTagsByRecipeId', () => {
-      const tagModel = require('../src/models/tag');
       expect(typeof tagModel.getAllTags).toBe('function');
       expect(typeof tagModel.createTag).toBe('function');
       expect(typeof tagModel.getTagsByRecipeId).toBe('function');

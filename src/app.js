@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const authRoutes = require('./routes/auth');
+const auth = require('./middleware/auth');
 
 const app = express();
 
@@ -12,5 +13,9 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+
+app.get('/api/me', auth, (req, res) => {
+  res.status(200).json({ user: req.user });
+});
 
 module.exports = app;

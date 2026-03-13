@@ -63,4 +63,40 @@ router.post('/register', validate(registerValidation), async (req, res, next) =>
   }
 });
 
+const loginValidation = [
+  body('email')
+    .trim()
+    .notEmpty().withMessage('Email is required')
+    .isEmail().withMessage('Must be a valid email address'),
+  body('password')
+    .notEmpty().withMessage('Password is required'),
+];
+
+router.post('/login', validate(loginValidation), async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = findByEmail(email);
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET || 'test-secret', {
+      expiresIn: '7d',
+    });
+
+    const userWithoutPassword = { ...user };
+    delete userWithoutPassword.password_hash;
+
+    return res.status(200).json({ user: userWithoutPassword, token });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

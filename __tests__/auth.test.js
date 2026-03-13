@@ -189,3 +189,195 @@ describe('POST /api/auth/register', () => {
     });
   });
 });
+
+describe('POST /api/auth/login', () => {
+  const validUser = {
+    username: 'testuser',
+    email: 'test@example.com',
+    password: 'password123',
+  };
+
+  beforeEach(async () => {
+    await request(app).post('/api/auth/register').send(validUser);
+  });
+
+  it('should login with valid credentials and return 200 with user and token', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: validUser.email, password: validUser.password });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('user');
+    expect(res.body).toHaveProperty('token');
+    expect(res.body.user.email).toBe(validUser.email);
+    expect(res.body.user.username).toBe(validUser.username);
+    expect(res.body.user).toHaveProperty('id');
+    expect(res.body.user).toHaveProperty('bio');
+    expect(res.body.user).toHaveProperty('created_at');
+  });
+
+  it('should not include password_hash in the user object', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: validUser.email, password: validUser.password });
+
+    expect(res.status).toBe(200);
+    expect(res.body.user).not.toHaveProperty('password_hash');
+  });
+
+  it('should return a valid JWT token containing user id', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: validUser.email, password: validUser.password });
+
+    const decoded = jwt.verify(res.body.token, process.env.JWT_SECRET || 'test-secret');
+    expect(decoded).toHaveProperty('id', res.body.user.id);
+  });
+
+  it('should return 401 for non-existent email', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'wrong@example.com', password: validUser.password });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Invalid email or password');
+  });
+
+  it('should return 401 for wrong password', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: validUser.email, password: 'wrongpassword' });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Invalid email or password');
+  });
+
+  it('should not reveal which field is wrong', async () => {
+    const resBadEmail = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'wrong@example.com', password: validUser.password });
+
+    const resBadPassword = await request(app)
+      .post('/api/auth/login')
+      .send({ email: validUser.email, password: 'wrongpassword' });
+
+    expect(resBadEmail.body.error).toBe(resBadPassword.body.error);
+  });
+
+  it('should return 400 when email is missing', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ password: 'password123' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'email' }),
+      ])
+    );
+  });
+
+  it('should return 400 when password is missing', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'test@example.com' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'password' }),
+      ])
+    );
+  });
+
+  it('should return 400 for invalid email format', async () => {
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'notanemail', password: 'password123' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'email' }),
+      ])
+    );
+  });
+});
+
+describe('Auth middleware', () => {
+  const validUser = {
+    username: 'testuser',
+    email: 'test@example.com',
+    password: 'password123',
+  };
+
+  let token;
+
+  beforeEach(async () => {
+    const res = await request(app).post('/api/auth/register').send(validUser);
+    token = res.body.token;
+  });
+
+  it('should attach req.user for valid Bearer token', async () => {
+    const res = await request(app)
+      .get('/api/me')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.user).toHaveProperty('id');
+    expect(res.body.user.email).toBe(validUser.email);
+    expect(res.body.user.username).toBe(validUser.username);
+    expect(res.body.user).not.toHaveProperty('password_hash');
+  });
+
+  it('should return 401 for missing Authorization header', async () => {
+    const res = await request(app).get('/api/me');
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Authentication required');
+  });
+
+  it('should return 401 for malformed token', async () => {
+    const res = await request(app)
+      .get('/api/me')
+      .set('Authorization', 'Bearer invalidtoken123');
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Authentication required');
+  });
+
+  it('should return 401 for expired token', async () => {
+    const expiredToken = jwt.sign(
+      { id: 1 },
+      process.env.JWT_SECRET || 'test-secret',
+      { expiresIn: '0s' }
+    );
+
+    const res = await request(app)
+      .get('/api/me')
+      .set('Authorization', `Bearer ${expiredToken}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Authentication required');
+  });
+
+  it('should return 401 when Authorization header is not Bearer scheme', async () => {
+    const res = await request(app)
+      .get('/api/me')
+      .set('Authorization', `Basic ${token}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Authentication required');
+  });
+
+  it('should return 401 when user no longer exists', async () => {
+    db.exec('DELETE FROM users');
+
+    const res = await request(app)
+      .get('/api/me')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('Authentication required');
+  });
+});

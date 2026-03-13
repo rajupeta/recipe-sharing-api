@@ -3,7 +3,7 @@ const { body } = require('express-validator');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const validate = require('../middleware/validate');
-const { createUser, findByEmail, findByUsername, findById } = require('../models/user');
+const { createUser, findByEmail, findByUsername } = require('../models/user');
 
 const router = express.Router();
 
@@ -90,7 +90,8 @@ router.post('/login', validate(loginValidation), async (req, res, next) => {
       expiresIn: '7d',
     });
 
-    const { password_hash, ...userWithoutPassword } = user;
+    const userWithoutPassword = { ...user };
+    delete userWithoutPassword.password_hash;
 
     return res.status(200).json({ user: userWithoutPassword, token });
   } catch (err) {
